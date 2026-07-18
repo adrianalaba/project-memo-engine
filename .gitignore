@@ -1,0 +1,5 @@
+# .gitignore
+.clasp.json
+creds.json
+node_modules/
+.DS_Store

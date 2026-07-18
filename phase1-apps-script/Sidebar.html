@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; padding: 15px; color: #333; }
+      .card-box { border: 1px solid #ccc; padding: 15px; border-radius: 6px; background-color: #f9f9f9; margin-bottom: 15px; }
+      .btn { padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 8px; }
+      .btn-submit { background-color: #1a73e8; color: white; }
+      .btn-success { background-color: #0f9d58; color: white; }
+      .btn-fail { background-color: #d93025; color: white; }
+      .hidden { display: none; }
+      textarea { width: 95%; height: 60px; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <h3>Memo Engine Workspace</h3>
+    <hr>
+    
+    <div id="quiz-container">
+      <div class="card-box">
+        <strong>Question:</strong>
+        <p id="question-text">Loading standard parameters...</p>
+      </div>
+      
+      <textarea id="user-response" placeholder="Type your answer here..."></textarea>
+      <button class="btn btn-submit" id="btn-reveal" onclick="revealAnswer()">Reveal Answer</button>
+      
+      <div id="answer-zone" class="hidden">
+        <div class="card-box" style="background-color: #e8f0fe;">
+          <strong>Correct Answer:</strong>
+          <p id="correct-answer-text"></p>
+        </div>
+        <p>Did you get it right?</p>
+        <button class="btn btn-success" onclick="submitLog(true)">Pass / Correct</button>
+        <button class="btn btn-fail" onclick="submitLog(false)">Fail / Incorrect</button>
+      </div>
+    </div>
+
+    <script>
+      let currentCard = null;
+      let startTime = null;
+
+      // Initialize by loading a card
+      window.onload = function() {
+        loadNextCard();
+      };
+
+      function loadNextCard() {
+        document.getElementById('answer-zone').classList.add('hidden');
+        document.getElementById('user-response').value = '';
+        document.getElementById('user-response').disabled = false;
+        document.getElementById('btn-reveal').style.display = 'block';
+        document.getElementById('question-text').innerText = 'Fetching next card...';
+        
+        startTime = new Date().getTime();
+        
+        google.script.run
+          .withSuccessHandler(function(card) {
+            if (card) {
+              currentCard = card;
+              document.getElementById('question-text').innerText = card.question;
+              document.getElementById('correct-answer-text').innerText = card.correct_answer;
+            } else {
+              document.getElementById('question-text').innerText = 'No active cards found in fact_flashcards.';
+            }
+          })
+          .getRandomCard();
+      }
+
+      function revealAnswer() {
+        document.getElementById('answer-zone').classList.remove('hidden');
+        document.getElementById('user-response').disabled = true;
+        document.getElementById('btn-reveal').style.display = 'none';
+      }
+
+      function submitLog(isCorrect) {
+        const endTime = new Date().getTime();
+        const responseTime = endTime - startTime;
+        const userResponse = document.getElementById('user-response').value;
+        
+        const payload = {
+          card_id: currentCard.card_id,
+          user_response: userResponse,
+          is_correct: isCorrect,
+          response_time_ms: responseTime
+        };
+        
+        google.script.run
+          .withSuccessHandler(function() {
+            loadNextCard();
+          })
+          .logQuizAttempt(payload);
+      }
+    </script>
+  </body>
+</html>
