@@ -20,38 +20,63 @@ function showSidebar() {
 }
 
 /**
- * Fetches a random active flashcard from fact_flashcards
- * @return {Object} Card data payload
+ * Retrieves a random flashcard that is currently due or overdue for review.
+ * @return {Object|null} A flashcard data object, or null if the queue is completely clear.
  */
 function getRandomCard() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const cardSheet = ss.getSheetByName('fact_flashcards');
   const data = cardSheet.getDataRange().getValues();
   
-  // Parse headers to dynamically find column indices
-  const headers = data[0];
-  const idxId = headers.indexOf('card_id');
-  const idxQuestion = headers.indexOf('question');
-  const idxAnswer = headers.indexOf('correct_answer');
-  const idxActive = headers.indexOf('is_active');
+  if (data.length <= 1) return null; // Sheet is empty except for headers
   
-  // Filter for active cards only (skipping header row)
-  const activeCards = [];
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][idxActive] === true || data[i][idxActive] === 'TRUE') {
-      activeCards.push({
-        card_id: data[i][idxId],
-        question: data[i][idxQuestion],
-        correct_answer: data[i][idxAnswer]
-      });
-    }
+  const headers = data[0];
+  const cardRows = data.slice(1);
+  
+  const idIdx = headers.indexOf('card_id');
+  const subjectIdx = headers.indexOf('subject_id');
+  const frontIdx = headers.indexOf('front');
+  const backIdx = headers.indexOf('back');
+  const repIdx = headers.indexOf('repetition_count');
+  const efIdx = headers.indexOf('easiness_factor');
+  const dateIdx = headers.indexOf('next_review_date');
+  
+  const now = new Date();
+  // Set timestamp to midnight for a strict date-only calendar comparison
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  
+  // Filter out cards whose review date is scheduled in the future
+  const dueQueue = cardRows.filter(row => {
+    const reviewDateVal = row[dateIdx];
+    if (!reviewDateVal) return true; // Treat unassigned dates as due immediately
+    
+    const reviewDate = new Date(reviewDateVal);
+    const reviewDateTime = new Date(reviewDate.getFullYear(), reviewDate.getMonth(), reviewDate.getDate()).getTime();
+    
+    return reviewDateTime <= today;
+  });
+  
+  if (dueQueue.length === 0) {
+    Logger.log("Review queue is clear! No cards are due today.");
+    return null;
   }
   
-  if (activeCards.length === 0) return null;
+  // Randomly select an item from the verified due array
+  const randomIndex = Math.floor(Math.random() * dueQueue.length);
+  const selectedCard = dueQueue[randomIndex];
   
-  // Pick a random card from the filtered array
-  const randomIndex = Math.floor(Math.random() * activeCards.length);
-  return activeCards[randomIndex];
+  // Return a structural entity map for frontend consumption
+  return {
+    card_id: selectedCard[idIdx],
+    subject_id: selectedCard[subjectIdx],
+    front: selectedCard[frontIdx],
+    back: selectedCard[backIdx],
+    repetition_count: selectedCard[repIdx],
+    easiness_factor: selectedCard[efIdx],
+    next_review_date: selectedCard[dateIdx],
+    // Calculated helper to track back to its physical row index for subsequent updates
+    sourceRowIndex: cardRows.indexOf(selectedCard) + 2 
+  };
 }
 
 /**
@@ -76,4 +101,74 @@ function logQuizAttempt(logData) {
   ]);
   
   return true;
+}
+
+function migrateFlashcardSchema() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('fact_flashcards');
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  
+  // 1. Add headers if they don't exist
+  sheet.getRange(1, 5, 1, 3).setValues([['repetition_count', 'easiness_factor', 'next_review_date']]);
+  
+  if (lastRow > 1) {
+    const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+    const rowsToUpdate = lastRow - 1;
+    
+    // 2. Build initialization vectors
+    const repVectors = Array(rowsToUpdate).fill([0]);
+    const efVectors = Array(rowsToUpdate).fill([2.5]);
+    const dateVectors = Array(rowsToUpdate).fill([todayStr]);
+    
+    // 3. Batch write backends to minimize API latency
+    sheet.getRange(2, 5, rowsToUpdate, 1).setValues(repVectors);
+    sheet.getRange(2, 6, rowsToUpdate, 1).setValues(efVectors);
+    sheet.getRange(2, 7, rowsToUpdate, 1).setValues(dateVectors);
+  }
+  Logger.log("Schema migration to Phase 2 completed successfully.");
+}
+
+/**
+ * Calculates the next state of a flashcard using the SM-2 algorithm.
+ * @param {boolean} isPass - User performance boolean from fact_quiz_logs.
+ * @param {number} currentRep - Current repetition count.
+ * @param {number} currentEf - Current easiness factor.
+ * @param {number} previousInterval - The last interval used for scheduling.
+ * @return {Object} The calculated metrics for updates {nextRep, nextEf, intervalDays}.
+ */
+function calculateSM2(isPass, currentRep, currentEf, previousInterval) {
+  const q = isPass ? 4 : 1;
+  let nextRep = currentRep;
+  let nextEf = currentEf;
+  let intervalDays = 1;
+
+  if (q < 3) {
+    // Incorrect answer: reset the review iteration sequence
+    nextRep = 0;
+    intervalDays = 1;
+    // Adjust EF based on failure response
+    nextEf = currentEf + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+  } else {
+    // Correct answer: advance sequence step
+    if (nextRep === 0) {
+      intervalDays = 1;
+    } else if (nextRep === 1) {
+      intervalDays = 6;
+    } else {
+      intervalDays = Math.round(previousInterval * currentEf);
+    }
+    nextRep += 1;
+    // Adjust EF based on success response
+    nextEf = currentEf + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+  }
+
+  // Safety guardrail for EF lower bound
+  if (nextEf < 1.3) nextEf = 1.3;
+
+  return {
+    nextRep: nextRep,
+    nextEf: parseFloat(nextEf.toFixed(2)),
+    intervalDays: intervalDays
+  };
 }
