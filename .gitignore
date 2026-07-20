@@ -3,3 +3,9 @@
 creds.json
 node_modules/
 .DS_Store
+
+# Phase 3 Python & Streamlit Security Rules
+phase3-streamlit-app/venv/
+phase3-streamlit-app/.streamlit/secrets.toml
+__pycache__/
+*.pyc
