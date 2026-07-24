@@ -2,7 +2,7 @@ import time
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from db import fetch_due_cards, record_quiz_transaction, fetch_analytics_logs
+from db import fetch_due_cards, record_quiz_transaction, fetch_analytics_logs, fetch_all_cards_df, fetch_subjects_dict, save_card_changes
 from logic import calculate_sm2
 
 st.set_page_config(page_title="Project Memo Engine", layout="wide")
@@ -92,3 +92,94 @@ with tab2:
         m1.metric("Historic Retention", f"{retention_acc:.1f}%")
         m2.metric("Total Reviews Logged", f"{total_reviews}")
         m3.metric("Avg Response Time", f"{avg_latency:.2f}s")
+
+
+        # --- Tab Navigation ---
+tab_study, tab_manage, tab_analytics = st.tabs(["📚 Study", "📝 Manage Cards", "📊 Analytics"])
+
+with tab_manage:
+    st.header("Card Management Grid")
+    st.caption("Double-click cells to edit. Add new rows at the bottom or delete rows using the checkbox column.")
+
+    # 1. Fetch Subject Map & Original Data
+    subject_map = fetch_subjects_dict()
+    subject_list = list(subject_map.keys())
+
+    # Keep original dataset in session state for diffing during save
+    if "original_cards_df" not in st.session_state:
+        st.session_state["original_cards_df"] = fetch_all_cards_df()
+
+    df_to_edit = st.session_state["original_cards_df"].copy()
+
+    # 2. Render Spreadsheet Grid with Config
+    edited_df = st.data_editor(
+        df_to_edit,
+        key="card_grid_editor",
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "card_id": None,      # Hidden from UI
+            "subject_id": None,   # Hidden from UI
+            "subject_name": st.column_config.SelectboxColumn(
+                "Subject",
+                help="Select the card subject category",
+                options=subject_list,
+                required=True,
+            ),
+            "front": st.column_config.TextColumn(
+                "Front (Prompt)",
+                help="Prompt or question displayed on front side",
+                required=True,
+                width="large"
+            ),
+            "back": st.column_config.TextColumn(
+                "Back (Answer)",
+                help="Answer or solution displayed on back side",
+                required=True,
+                width="large"
+            ),
+            "repetition_count": st.column_config.NumberColumn(
+                "Reps",
+                disabled=True,
+                help="Spaced Repetition count (Auto-calculated)"
+            ),
+            "easiness_factor": st.column_config.NumberColumn(
+                "EF Factor",
+                disabled=True,
+                format="%.2f",
+                help="Easiness factor (Auto-calculated)"
+            ),
+            "next_review_date": st.column_config.DateColumn(
+                "Next Review",
+                disabled=True,
+                format="YYYY-MM-DD"
+            )
+        }
+    )
+
+    # 3. Save Action Button
+    st.divider()
+    col1, col2 = st.columns([1, 4])
+
+    with col1:
+        if st.button("💾 Save All Changes", type="primary", use_container_width=True):
+            success, message = save_card_changes(
+                edited_df=edited_df, 
+                original_df=st.session_state["original_cards_df"],
+                subject_map=subject_map
+            )
+
+            if success:
+                st.success(message)
+                # Clear session state and cache to force reload fresh data from DB
+                st.session_state.pop("original_cards_df", None)
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(message)
+
+    with col2:
+        if st.button("🔄 Discard Unsaved Changes"):
+            st.session_state.pop("original_cards_df", None)
+            st.rerun()
